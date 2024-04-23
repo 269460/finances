@@ -1,4 +1,5 @@
-using LiveCharts;
+﻿using LiveCharts;
+using LiveCharts.Defaults;
 using LiveCharts.Wpf;
 using System;
 using System.Collections.ObjectModel;
@@ -8,6 +9,7 @@ using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using System.Windows.Threading;
 
 namespace finances
 {
@@ -21,11 +23,40 @@ namespace finances
     {
         public ObservableCollection<Transaction> Expenses { get; set; }
         public ObservableCollection<Transaction> Incomes { get; set; }
+        public CurrencyService CurrencyService { get; private set; }
+        private string _currencyRate;
+        public string CurrencyRate
+        {
+            get => _currencyRate;
+            set
+            {
+                if (_currencyRate != value)
+                {
+                    _currencyRate = value;
+                    OnPropertyChanged(nameof(CurrencyRate));
+                }
+            }
+        }
 
         public MainWindowViewModel()
         {
             Expenses = new ObservableCollection<Transaction>();
             Incomes = new ObservableCollection<Transaction>();
+            CurrencyService = new CurrencyService("2d078771a0033dc8207c2f1861e80ba0", Dispatcher.CurrentDispatcher);
+            CurrencyService.OnRateUpdated += HandleRateUpdated;
+            InitializeCurrencyRate();
+        }
+
+        private async void InitializeCurrencyRate()
+        {
+            try
+            {
+                await CurrencyService.GetExchangeRateAsync("USD", "EUR"); // Example base and target currencies
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Error retrieving currency rate: " + ex.Message);
+            }
         }
 
         public void AddExpense(double amount, DateTime date)
@@ -40,12 +71,21 @@ namespace finances
             OnPropertyChanged(nameof(Incomes));
         }
 
+        private void HandleRateUpdated(double rate)
+        {
+            CurrencyRate = $"USD to EUR Rate: {rate:N2}";
+            OnPropertyChanged(nameof(CurrencyRate));
+        }
+
         public event PropertyChangedEventHandler PropertyChanged;
 
         protected virtual void OnPropertyChanged(string propertyName = null)
         {
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
         }
+
+       
+
     }
 
     public partial class MainWindow : Window
@@ -55,6 +95,9 @@ namespace finances
         private ComboBox? _comboBoxTransactionType;
         private DatePicker? _datePickerTransactionDate;
         private CartesianChart _lineChart;
+        //private CurrencyService _currencyService;
+        private TextBlock _rateDisplay;
+
 
         public MainWindow()
         {
@@ -62,12 +105,15 @@ namespace finances
             _viewModel = new MainWindowViewModel();
             DataContext = _viewModel;
             Loaded += MainWindow_Loaded;
+           // _currencyService = new CurrencyService();
+            //_currencyService.OnRateUpdated += UpdateCurrencyDisplay;
         }
 
         private void MainWindow_Loaded(object sender, RoutedEventArgs e)
         {
             InitializeFields();
             UpdateChart();
+           // UpdateCurrencyRate();
         }
 
         private void InitializeFields()
@@ -76,9 +122,11 @@ namespace finances
             _comboBoxTransactionType = (ComboBox)FindName("comboBoxTransactionType");
             _datePickerTransactionDate = (DatePicker)FindName("datePickerTransactionDate");
             _lineChart = (CartesianChart)FindName("lineChart");
+            _rateDisplay = (TextBlock)FindName("RateDisplay");
 
             Button addButton = (Button)FindName("buttonAddTransaction");
             addButton.Click += ButtonAddTransaction_Click;
+            
         }
 
         private void ButtonAddTransaction_Click(object sender, RoutedEventArgs e)
@@ -125,7 +173,12 @@ namespace finances
                 var expenseSeries = new LineSeries
                 {
                     Title = "Expenses",
-                    Values = new ChartValues<double>(_viewModel.Expenses.Select(x => x.Amount)),
+                    Values = new ChartValues<ObservableValue>(
+                        _viewModel.Expenses
+                            .GroupBy(x => x.Date.Date)
+                            .OrderBy(g => g.Key)
+                            .Select(g => new ObservableValue(g.Sum(t => t.Amount)))
+                    ),
                     PointGeometry = DefaultGeometries.Circle,
                     PointGeometrySize = 10,
                     Stroke = Brushes.Red
@@ -134,7 +187,12 @@ namespace finances
                 var incomeSeries = new LineSeries
                 {
                     Title = "Incomes",
-                    Values = new ChartValues<double>(_viewModel.Incomes.Select(x => x.Amount)),
+                    Values = new ChartValues<ObservableValue>(
+                        _viewModel.Incomes
+                            .GroupBy(x => x.Date.Date)
+                            .OrderBy(g => g.Key)
+                            .Select(g => new ObservableValue(g.Sum(t => t.Amount)))
+                    ),
                     PointGeometry = DefaultGeometries.Circle,
                     PointGeometrySize = 10,
                     Stroke = Brushes.Green
@@ -143,14 +201,13 @@ namespace finances
                 _lineChart.Series.Add(expenseSeries);
                 _lineChart.Series.Add(incomeSeries);
 
-                // Ustawienie zakresu dla osi X na podstawie dat transakcji
-                var dates = _viewModel.Expenses.Select(x => x.Date).Union(_viewModel.Incomes.Select(x => x.Date)).Distinct();
-                var labels = dates.OrderBy(date => date).Select(date => date.ToString("MMM yy")).ToArray();
+                var dates = _viewModel.Expenses.Concat(_viewModel.Incomes).Select(x => x.Date.Date).Distinct().OrderBy(x => x);
+                var labels = dates.Select(date => date.ToString("dd MMM yy")).ToArray();
 
                 _lineChart.AxisX.Clear();
                 _lineChart.AxisX.Add(new Axis
                 {
-                    Title = "Month",
+                    Title = "Date",
                     Labels = labels,
                     LabelsRotation = 45,
                     Separator = new LiveCharts.Wpf.Separator { Step = 1, IsEnabled = false }
@@ -168,7 +225,38 @@ namespace finances
                 _lineChart.InvalidateVisual();
             });
         }
+
+        private void UpdateCurrencyDisplay(double rate)
+        {
+            Dispatcher.Invoke(() =>
+            {
+                _rateDisplay.Text = $"USD to EUR Rate: {rate:N2}";
+            });
+        }
+
+        private async void UpdateCurrencyRate()
+        {
+            try
+            {
+                // Poprawka: poprawna sygnatura metody GetExchangeRateAsync
+                double rate = await _viewModel.CurrencyService.GetExchangeRateAsync("USD", "EUR");
+                Dispatcher.Invoke(() =>
+                {
+                    _rateDisplay.Text = $"USD to EUR Rate: {rate:N2}";  // Update the display with the rate
+                });
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Error retrieving currency rate: " + ex.Message);
+            }
+        }
+
     }
+
+    
+   
+
+
 }
 
 
@@ -183,13 +271,14 @@ public class MainWindowViewModel : INotifyPropertyChanged
             Expenses = new ObservableCollection<double>();
             Incomes = new ObservableCollection<double>();
             SeriesCollection = new SeriesCollection();
-           // Expenses.CollectionChanged += (s, e) => UpdateChart();
-          //  Incomes.CollectionChanged += (s, e) => UpdateChart();
-        }
+            //UpdateCurrencyRate();  // Fetch and display the currency rate
+                               // Expenses.CollectionChanged += (s, e) => UpdateChart();
+                               //  Incomes.CollectionChanged += (s, e) => UpdateChart();
+    }
 
         public void AddExpense(double amount)
         {
-            Expenses.Add(amount);
+            Expenses.Add(amount); 
         }
 
         public void AddIncome(double amount)
