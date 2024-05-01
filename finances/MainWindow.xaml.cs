@@ -1,14 +1,17 @@
-﻿using LiveCharts;
+﻿using finances;
+using LiveCharts;
 using LiveCharts.Defaults;
 using LiveCharts.Wpf;
 using System;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Data.Entity;
 using System.Globalization;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using System.Windows.Threading;
 
 namespace finances
@@ -112,8 +115,18 @@ namespace finances
         private void MainWindow_Loaded(object sender, RoutedEventArgs e)
         {
             InitializeFields();
+            using (var dbContext = new FinancialDbContext())
+            {
+                var financialTransactions = dbContext.FinancialTransactions.ToList<FinancialTransaction>();
+                foreach (FinancialTransaction transaction in financialTransactions)
+                {
+                    if (transaction.Type == TransactionType.Income) { _viewModel.AddIncome(transaction.Amount, transaction.TransactionDate); }
+                    if (transaction.Type == TransactionType.Expense) { _viewModel.AddExpense(transaction.Amount, transaction.TransactionDate); }
+                    
+                }
+            }
             UpdateChart();
-           // UpdateCurrencyRate();
+            // UpdateCurrencyRate();
         }
 
         private void InitializeFields()
@@ -142,13 +155,26 @@ namespace finances
                     if (selectedItem != null)
                     {
                         DateTime selectedDate = _datePickerTransactionDate.SelectedDate.Value;
+                        FinancialTransaction financialTransaction = new FinancialTransaction();
+                        financialTransaction.Amount = amount;
+                        financialTransaction.TransactionDate = selectedDate;
+                        financialTransaction.Description = "transaction";
                         if (selectedItem.Content.ToString() == "Expense")
                         {
                             _viewModel.AddExpense(amount, selectedDate);
+                            financialTransaction.Type = TransactionType.Expense;
                         }
                         else if (selectedItem.Content.ToString() == "Income")
                         {
                             _viewModel.AddIncome(amount, selectedDate);
+                            financialTransaction.Type = TransactionType.Income;
+                        }
+                        
+                        using (var dbContext = new FinancialDbContext())
+                        {
+                            // Dodaj lub zmodyfikuj dane
+                            dbContext.FinancialTransactions.Add(financialTransaction);
+                            dbContext.SaveChanges(); // Zapisz zmiany w bazie danych
                         }
                     }
                     UpdateChart();
@@ -223,6 +249,8 @@ namespace finances
 
                 _lineChart.LegendLocation = LegendLocation.Right;
                 _lineChart.InvalidateVisual();
+
+                
             });
         }
 
@@ -274,11 +302,11 @@ public class MainWindowViewModel : INotifyPropertyChanged
             //UpdateCurrencyRate();  // Fetch and display the currency rate
                                // Expenses.CollectionChanged += (s, e) => UpdateChart();
                                //  Incomes.CollectionChanged += (s, e) => UpdateChart();
-    }
+        }
 
         public void AddExpense(double amount)
         {
-            Expenses.Add(amount); 
+            Expenses.Add(amount);
         }
 
         public void AddIncome(double amount)
@@ -286,8 +314,9 @@ public class MainWindowViewModel : INotifyPropertyChanged
             Incomes.Add(amount);
         }
 
+    
 
-        public event PropertyChangedEventHandler PropertyChanged;
+    public event PropertyChangedEventHandler PropertyChanged;
 
         protected virtual void OnPropertyChanged(string propertyName = null)
         {
